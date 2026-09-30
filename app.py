@@ -2,9 +2,6 @@ import json
 import os
 import random
 import re
-import hashlib
-import secrets
-import sqlite3
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
@@ -19,108 +16,6 @@ IMAGES_DIR = os.path.join(BASE_DIR, "images")
 app = Flask(__name__)
 
 app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1) 
-
-
-# ---------------------------------------------------------------- song votes
-#
-# Votes live in a small SQLite database separate from the catalog data. Each
-# IP address is stored only as a salted hash, and a song/IP pair can have one
-# active vote at a time. +1 is a like (+5 points) and -1 is a dislike (-5).
-
-VOTES_DB = os.path.join(BASE_DIR, "votes.db")
-
-def _votes_db():
-    conn = sqlite3.connect(VOTES_DB)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS vote_meta (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS song_votes (
-            song_id TEXT NOT NULL,
-            ip_hash TEXT NOT NULL,
-            vote INTEGER NOT NULL CHECK (vote IN (-1, 1)),
-            PRIMARY KEY (song_id, ip_hash)
-        )
-    """)
-    row = conn.execute("SELECT value FROM vote_meta WHERE key = 'ip_salt'").fetchone()
-    if row is None:
-        conn.execute("INSERT INTO vote_meta (key, value) VALUES ('ip_salt', ?)", (secrets.token_hex(32),))
-        conn.commit()
-    return conn
-
-
-def _ip_hash(ip):
-    conn = _votes_db()
-    salt = conn.execute("SELECT value FROM vote_meta WHERE key = 'ip_salt'").fetchone()["value"]
-    conn.close()
-    return hashlib.sha256((salt + "\0" + (ip or "")).encode("utf-8")).hexdigest()
-
-
-def _song_vote_state(song_id, ip):
-    conn = _votes_db()
-    ip_hash = _ip_hash(ip)
-    row = conn.execute(
-        "SELECT vote FROM song_votes WHERE song_id = ? AND ip_hash = ?",
-        (song_id, ip_hash),
-    ).fetchone()
-    counts = conn.execute(
-        """SELECT
-             COALESCE(SUM(CASE WHEN vote = 1 THEN 1 ELSE 0 END), 0) AS likes,
-             COALESCE(SUM(CASE WHEN vote = -1 THEN 1 ELSE 0 END), 0) AS dislikes,
-             COALESCE(SUM(vote), 0) AS net_votes
-           FROM song_votes WHERE song_id = ?""",
-        (song_id,),
-    ).fetchone()
-    conn.close()
-    current = row["vote"] if row else 0
-    return {
-        "vote": current,
-        "likes": int(counts["likes"]),
-        "dislikes": int(counts["dislikes"]),
-        "score": int(counts["net_votes"]) * 5,
-    }
-
-
-def _change_song_vote(song_id, ip, requested_vote):
-    if requested_vote not in (-1, 1):
-        abort(400)
-    conn = _votes_db()
-    ip_hash = _ip_hash(ip)
-    try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT vote FROM song_votes WHERE song_id = ? AND ip_hash = ?",
-            (song_id, ip_hash),
-        ).fetchone()
-        if row and row["vote"] == requested_vote:
-            conn.execute(
-                "DELETE FROM song_votes WHERE song_id = ? AND ip_hash = ?",
-                (song_id, ip_hash),
-            )
-        else:
-            conn.execute(
-                "INSERT INTO song_votes (song_id, ip_hash, vote) VALUES (?, ?, ?) "
-                "ON CONFLICT(song_id, ip_hash) DO UPDATE SET vote = excluded.vote",
-                (song_id, ip_hash, requested_vote),
-            )
-        conn.commit()
-    except Exception:
-        conn.rollback()
-        raise
-    finally:
-        conn.close()
-    return _song_vote_state(song_id, ip)
-
-
-def _song_id(artist, title):
-    # Match the catalog's duplicate-song rule: same artist + normalized title
-    # means the same song, even if it appears as both a single and project track.
-    return f"{artist['slug']}|{database.name_key(title)}"
 
 
 
@@ -499,67 +394,6 @@ def build_top_producers():
     return results
 
 
-def build_top_tracks(limit=5):
-    """Build the highest-scoring canonical tracks/singles for the homepage.
-
-    Scores come from the song vote database, where each like is +5 and each
-    dislike is -5. Songs with no votes are still eligible and have 0 points.
-    """
-    songs = {}
-
-    for artist in database.get_artists():
-        canonical = database.build_canonical_track_map(artist)
-
-        for project in artist["projects"]:
-            for track in project["tracks"]:
-                if not database._is_canonical_track(
-                    canonical, track["title"], project["slug"], track["index"]
-                ):
-                    continue
-                song_id = _song_id(artist, track["title"])
-                songs.setdefault(song_id, {
-                    "title": track["title"],
-                    "artist_name": artist["name"],
-                    "url": url_for(
-                        "track",
-                        slug=artist["slug"],
-                        project_slug=project["slug"],
-                        track_slug=track["slug"],
-                    ),
-                    "score": 0,
-                })
-
-        for single in artist["singles"]:
-            if not database._is_canonical_single(canonical, single["title"], single["slug"]):
-                continue
-            song_id = _song_id(artist, single["title"])
-            songs.setdefault(song_id, {
-                "title": single["title"],
-                "artist_name": artist["name"],
-                "url": url_for(
-                    "single", slug=artist["slug"], single_slug=single["slug"]
-                ),
-                "score": 0,
-            })
-
-    conn = _votes_db()
-    try:
-        rows = conn.execute(
-            "SELECT song_id, COALESCE(SUM(vote), 0) * 5 AS score "
-            "FROM song_votes GROUP BY song_id"
-        ).fetchall()
-    finally:
-        conn.close()
-
-    for row in rows:
-        if row["song_id"] in songs:
-            songs[row["song_id"]]["score"] = int(row["score"])
-
-    results = list(songs.values())
-    results.sort(key=lambda song: (-song["score"], song["title"].casefold()))
-    return results[:limit]
-
-
 # ---------------------------------------------------------------- routes
 
 @app.route("/")
@@ -570,7 +404,6 @@ def index():
         track_count=database.get_total_track_count(),
         search_index=_safe_json(build_search_index()),
         newest_releases=build_newest_releases(),
-        top_tracks=build_top_tracks(),
         top_producers=build_top_producers(),
     )
 
@@ -686,12 +519,8 @@ def track(slug, project_slug, track_slug):
     the_track = next((t for t in record["tracks"] if t["slug"] == track_slug), None)
     if the_track is None:
         abort(404)
-    song_id = _song_id(person, the_track["title"])
     return render_template(
         "track.html", artist=person, project=record, track=the_track,
-        vote_url=url_for("vote_track", slug=slug, project_slug=project_slug, track_slug=track_slug),
-        _song_vote_id=song_id,
-        vote_state=_song_vote_state(song_id, request.remote_addr),
     )
 
 
@@ -703,48 +532,10 @@ def single(slug, single_slug):
     record = database.get_single(person, single_slug)
     if record is None:
         abort(404)
-    song_id = _song_id(person, record["title"])
     return render_template(
         "single.html", artist=person, single=record,
-        vote_url=url_for("vote_single", slug=slug, single_slug=single_slug),
-        _song_vote_id=song_id,
-        vote_state=_song_vote_state(song_id, request.remote_addr),
     )
 
-
-@app.post("/artist/<slug>/<project_slug>/<track_slug>/vote")
-def vote_track(slug, project_slug, track_slug):
-    person = database.get_artist(slug)
-    if person is None:
-        abort(404)
-    project = database.get_project(person, project_slug)
-    if project is None:
-        abort(404)
-    the_track = next((t for t in project["tracks"] if t["slug"] == track_slug), None)
-    if the_track is None:
-        abort(404)
-    payload = request.get_json(silent=True) or {}
-    requested_vote = 1 if payload.get("vote") == "like" else -1 if payload.get("vote") == "dislike" else 0
-    if requested_vote == 0:
-        abort(400)
-    state = _change_song_vote(_song_id(person, the_track["title"]), request.remote_addr, requested_vote)
-    return state
-
-
-@app.post("/artist/<slug>/single/<single_slug>/vote")
-def vote_single(slug, single_slug):
-    person = database.get_artist(slug)
-    if person is None:
-        abort(404)
-    record = database.get_single(person, single_slug)
-    if record is None:
-        abort(404)
-    payload = request.get_json(silent=True) or {}
-    requested_vote = 1 if payload.get("vote") == "like" else -1 if payload.get("vote") == "dislike" else 0
-    if requested_vote == 0:
-        abort(400)
-    state = _change_song_vote(_song_id(person, record["title"]), request.remote_addr, requested_vote)
-    return state
 
 
 @app.route("/collective/<slug>")
@@ -1058,15 +849,14 @@ html.singles-only #album-releases,
 html.singles-only #album-release-heading,
 html.singles-only .album-track-credit{display:none}
 
-.newest-panel,.top-tracks-panel,.top-producers-panel{
+.newest-panel,.top-producers-panel{
   border:1px solid var(--border-soft);border-radius:var(--radius-2xl);
   padding:18px;background:var(--surface);color:var(--ink);
   box-shadow:var(--shadow-card);transition:all .3s ease;
 }
-.newest-panel:hover,.top-tracks-panel:hover,.top-producers-panel:hover{box-shadow:var(--shadow-deep)}
+.newest-panel:hover,.top-producers-panel:hover{box-shadow:var(--shadow-deep)}
 .newest-panel{margin-bottom:24px}
-.top-tracks-panel{margin-bottom:24px}
-.newest-panel h2,.top-tracks-panel h2,.top-producers-panel h2{font-size:14px;text-transform:uppercase;letter-spacing:.03em;
+.newest-panel h2,.top-producers-panel h2{font-size:14px;text-transform:uppercase;letter-spacing:.03em;
   margin:0 0 12px;padding-bottom:10px;border-bottom:1px solid var(--border-soft)}
 .newest-item{display:grid;grid-template-columns:52px 1fr;gap:12px;
   padding:10px 0;border-bottom:1px solid var(--rule);text-decoration:none}
@@ -1077,14 +867,6 @@ html.singles-only .album-track-credit{display:none}
 .newest-item:hover .newest-title{color:var(--red)}
 .newest-meta{font-size:12px;color:var(--mute);margin:0;line-height:1.4}
 
-.top-tracks-list{list-style:none;margin:0;padding:0}
-.top-tracks-list li{border-bottom:1px solid var(--rule)}
-.top-tracks-list li:last-child{border-bottom:0}
-.top-tracks-list a{display:flex;align-items:baseline;gap:8px;padding:9px 0;text-decoration:none}
-.top-tracks-list .rank{font-family:"Archivo Black",sans-serif;color:var(--blue);font-size:13px;min-width:20px}
-.top-tracks-list .tname{font-weight:600;font-size:14px;line-height:1.25;flex:1}
-.top-tracks-list .tpoints{color:var(--mute);font-size:12px;white-space:nowrap}
-.top-tracks-list a:hover .tname{color:var(--red)}
 
 .top-producers-list{list-style:none;margin:0;padding:0}
 .top-producers-list li{border-bottom:1px solid var(--rule)}
@@ -1214,17 +996,6 @@ a.platform:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .singles h3{font-family:'Inter',sans-serif;font-weight:900;font-size:18px;margin-top:14px;letter-spacing:-0.01em;}
 
 /* detail pages */
-/* song voting */
-.song-votes{margin-top:26px;padding:20px 22px;border:1px solid var(--border-soft);border-radius:var(--radius-2xl);background:var(--surface);box-shadow:var(--shadow-card);transition:all .3s ease}
-.song-votes-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:12px}
-.song-votes-title{font-weight:600;font-size:15px}
-.song-votes-score{font-family:"Archivo Black",Archivo,sans-serif;font-size:22px}
-.song-votes-buttons{display:flex;gap:10px;flex-wrap:wrap}
-.song-vote-button{border:1px solid var(--border-soft);border-radius:var(--radius-2xl);background:var(--paper);color:var(--ink);padding:10px 16px;font:600 14px Archivo,"Helvetica Neue",Arial,sans-serif;cursor:pointer;box-shadow:var(--shadow-card);transition:all .3s ease}
-.song-vote-button:hover{transform:translateY(-2px);box-shadow:var(--shadow-deep)}
-.song-vote-button.active{background:var(--button-bg);color:var(--button-fg)}
-.song-vote-button:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
-.song-vote-counts{margin-top:9px;color:var(--mute);font-size:13px}
 
 .detail{display:grid;grid-template-columns:320px 1fr;gap:42px;align-items:start}
 .detail h1{font-size:clamp(34px,5.5vw,56px);line-height:1;margin-bottom:12px}
@@ -1621,50 +1392,6 @@ function renderPager(container, totalItems, pageSize, currentPage, onSelect){
     container.appendChild(btn);
   }
 }
-</script>
-<script>
-(function(){
-  function updateVoteBox(box, data){
-    var score = box.querySelector('[data-score]');
-    var likeCount = box.querySelector('[data-like-count]');
-    var dislikeCount = box.querySelector('[data-dislike-count]');
-    if (score) score.textContent = data.score + ' points';
-    if (likeCount) likeCount.textContent = data.likes;
-    if (dislikeCount) dislikeCount.textContent = data.dislikes;
-    box.querySelectorAll('[data-vote]').forEach(function(button){
-      var active = (button.dataset.vote === 'like' && data.vote === 1) || (button.dataset.vote === 'dislike' && data.vote === -1);
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-pressed', active ? 'true' : 'false');
-    });
-  }
-
-  window.initVoteBoxes = function(){
-  document.querySelectorAll('.song-votes').forEach(function(box){
-    if (box.dataset.bound) return;
-    box.dataset.bound = '1';
-    box.querySelectorAll('[data-vote]').forEach(function(button){
-      button.addEventListener('click', async function(){
-        button.disabled = true;
-        try {
-          var response = await fetch(box.dataset.voteUrl, {
-            method:'POST',
-            headers:{'Content-Type':'application/json'},
-            body:JSON.stringify({vote:button.dataset.vote})
-          });
-          if (!response.ok) throw new Error('vote failed');
-          updateVoteBox(box, await response.json());
-        } catch (error) {
-          var message = box.querySelector('[data-vote-message]');
-          if (message) { message.textContent = 'Could not save your vote. Try again.'; message.hidden = false; }
-        } finally {
-          button.disabled = false;
-        }
-      });
-    });
-  });
-  };
-  window.initVoteBoxes();
-})();
 </script>
 <script>
 (function(){
@@ -2249,7 +1976,6 @@ function renderPager(container, totalItems, pageSize, currentPage, onSelect){
   }
   function afterSwap(){
     rerunScripts(pageEl);
-    if (window.initVoteBoxes) window.initVoteBoxes();
     if (window.captureReleaseGroups) window.captureReleaseGroups();
     if (window.setReleaseOrder){
       var order = 'oldest';
@@ -2430,20 +2156,6 @@ INDEX = """
     </div>
     {% endif %}
 
-    {% if top_tracks %}
-    <div class="top-tracks-panel rounded-2xl shadow-xl transition-all duration-300">
-      <h2>Top 5 Tracks</h2>
-      <ol class="top-tracks-list">
-        {% for t in top_tracks %}
-        <li><a href="{{ t.url }}" title="{{ t.title }}{% if t.artist_name %} · {{ t.artist_name }}{% endif %}">
-          <span class="rank">#{{ loop.index }}</span>
-          <span class="tname">{{ t.title }}</span>
-          <span class="tpoints">{{ t.score }} point{{ '' if t.score == 1 or t.score == -1 else 's' }}</span>
-        </a></li>
-        {% endfor %}
-      </ol>
-    </div>
-    {% endif %}
 
     {% if top_producers %}
     <div class="top-producers-panel rounded-2xl shadow-xl transition-all duration-300">
@@ -2817,27 +2529,10 @@ PROJECT = """
 {% endblock %}
 """
 
-VOTE_WIDGET = """
-{% macro vote(song_id, vote_url, vote_state) %}
-<div class="song-votes rounded-2xl shadow-xl transition-all duration-300" data-song-id="{{ song_id }}" data-vote-url="{{ vote_url }}">
-  <div class="song-votes-head">
-    <span class="song-votes-title">Rate this song</span>
-    <span class="song-votes-score" data-score>{{ vote_state.score }} points</span>
-  </div>
-  <div class="song-votes-buttons">
-    <button type="button" class="song-vote-button rounded-2xl shadow-lg transition-all duration-300{% if vote_state.vote == 1 %} active{% endif %}" data-vote="like" aria-pressed="{{ 'true' if vote_state.vote == 1 else 'false' }}">👍 Like <span data-like-count>{{ vote_state.likes }}</span></button>
-    <button type="button" class="song-vote-button rounded-2xl shadow-lg transition-all duration-300{% if vote_state.vote == -1 %} active{% endif %}" data-vote="dislike" aria-pressed="{{ 'true' if vote_state.vote == -1 else 'false' }}">👎 Dislike <span data-dislike-count>{{ vote_state.dislikes }}</span></button>
-  </div>
-  <div class="song-vote-counts" data-vote-message hidden></div>
-</div>
-{% endmacro %}
-"""
-
 TRACK = """
 {% extends "layout.html" %}
 {% import "cover.html" as art %}
 {% import "listen.html" as play %}
-{% import "vote.html" as votes %}
 {% import "credit-hover.html" as credit %}
 {% block title %}{{ track.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('project', slug=artist.slug, project_slug=project.slug) }}">Back to {{ project.title }}</a>{% endblock %}
@@ -2857,7 +2552,6 @@ TRACK = """
       {% if project.year %}<li><b>Released</b><span>{{ project.year }}</span></li>{% endif %}
     </ul>
     {{ play.listen(track.url) }}
-    {{ votes.vote(_song_vote_id, vote_url, vote_state) }}
   </div>
 </div>
 {% endblock %}
@@ -2868,7 +2562,6 @@ SINGLE = """
 {% import "cover.html" as art %}
 {% import "listen.html" as play %}
 {% import "video.html" as mv %}
-{% import "vote.html" as votes %}
 {% import "credit-hover.html" as credit %}
 {% block title %}{{ single.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('artist', slug=artist.slug) }}">Back to {{ artist.name }}</a>{% endblock %}
@@ -2885,7 +2578,6 @@ SINGLE = """
       </span></li>{% endif %}
     </ul>
     {{ play.listen(single.url) }}
-    {{ votes.vote(_song_vote_id, vote_url, vote_state) }}
     {{ mv.video(single.music_video) }}
   </div>
 </div>
@@ -3020,7 +2712,6 @@ app.jinja_loader = DictLoader({
     "listen.html": LISTEN_BLOCK,
     "video.html": VIDEO_BLOCK,
     "credit-hover.html": CREDIT_HOVER,
-    "vote.html": VOTE_WIDGET,
     "index.html": INDEX,
     "artist.html": ARTIST,
     "project.html": PROJECT,
