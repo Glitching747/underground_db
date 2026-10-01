@@ -90,8 +90,25 @@ def artist_hover_info(name):
     }
 
 
+def collective_hover_info(name):
+    """Small collective summary used by collective hover cards."""
+    match = database.find_collective_by_name(name)
+    if not match:
+        return None
+    current = match.get("current_members") or []
+    former = match.get("former_members") or []
+    return {
+        "name": match["name"],
+        "image": match.get("image") or "",
+        "current_members": len(current),
+        "former_members": len(former),
+        "url": url_for("collective", slug=match["slug"]),
+    }
+
+
 app.jinja_env.globals["artist_link"] = artist_link
 app.jinja_env.globals["artist_hover_info"] = artist_hover_info
+app.jinja_env.globals["collective_hover_info"] = collective_hover_info
 app.jinja_env.globals["collective_link"] = collective_link
 app.jinja_env.globals["producer_link"] = producer_link
 app.jinja_env.globals["member_link"] = member_link
@@ -1105,6 +1122,30 @@ html.dark .sp-cover-link{background:rgba(0,0,0,.08);box-shadow:0 0 0 1px rgba(0,
 html.dark .sp-q-thumb{background:rgba(0,0,0,.08)}
 .sp-toast{position:absolute;left:0;right:0;bottom:calc(100% + 10px);text-align:center;background:var(--red);color:#fff;border-radius:var(--radius-2xl);padding:9px 14px;box-shadow:var(--shadow-deep);font-weight:600}
 .sp-toast[hidden]{display:none}
+
+/* share / embed */
+.share-inline-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.share-inline-row .platforms{margin-top:22px}
+.share-inline-row .share-trigger{margin-top:22px}
+.share-play-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.share-play-row .share-trigger{margin-top:24px}
+.share-trigger{border:1px solid var(--border-soft);border-radius:12px;background:var(--ink);color:var(--paper);padding:9px 14px;font:600 13px Archivo,"Helvetica Neue",Arial,sans-serif;cursor:pointer;box-shadow:var(--shadow-card);transition:all .2s ease}
+.share-trigger:hover{background:var(--red);transform:translateY(-1px);box-shadow:var(--shadow-deep)}
+.share-trigger:focus-visible,.share-copy:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.share-modal{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.45);backdrop-filter:blur(3px)}
+.share-modal[hidden]{display:none}
+.share-dialog{position:relative;width:min(620px,calc(100vw - 32px));padding:20px;border:1px solid var(--border-soft);border-radius:18px;background:var(--surface);color:var(--ink);box-shadow:var(--shadow-deep)}
+.share-dialog h2{margin:0 42px 16px 0;font-size:18px;text-transform:uppercase;letter-spacing:.03em}
+.share-close{position:absolute;top:12px;right:12px;width:34px;height:34px;border:1px solid var(--border-soft);border-radius:10px;background:var(--ink);color:var(--paper);font:700 18px/1 Arial,sans-serif;cursor:pointer}
+.share-close:hover{background:var(--red)}
+.share-row{display:flex;align-items:stretch;gap:8px}
+.share-value,.share-embed-code{flex:1;min-width:0;padding:10px 12px;border:1px solid var(--border-soft);border-radius:12px;background:var(--paper);color:var(--ink);font:13px/1.4 monospace;box-sizing:border-box}
+.share-value{overflow:auto;white-space:nowrap}
+.share-embed-code{min-height:82px;width:100%;resize:vertical;white-space:pre-wrap}
+.share-copy{flex:none;border:1px solid var(--border-soft);border-radius:12px;background:var(--ink);color:var(--paper);padding:10px 14px;font:600 13px Archivo,"Helvetica Neue",Arial,sans-serif;cursor:pointer;box-shadow:var(--shadow-card);transition:all .2s ease}
+.share-copy:hover{background:var(--red);transform:translateY(-1px)}
+.share-embed-label{margin:18px 0 8px;font-size:13px;font-weight:600;color:var(--mute)}
+@media (max-width:640px){.share-row{flex-direction:column}.share-copy{width:100%}.share-modal{padding:12px}}
 </style>
 </head>
 <body class="antialiased font-sans transition-all duration-300">
@@ -2030,6 +2071,76 @@ function renderPager(container, totalItems, pageSize, currentPage, onSelect){
   if (document.readyState === 'complete') bindPageEmbeds();
 })();
 </script>
+
+<script>
+/* Underground Catalog share / embed popup */
+document.addEventListener('click', function(e){
+  var openBtn = e.target.closest ? e.target.closest('[data-share-open]') : null;
+  if (openBtn){
+    var modal = openBtn.nextElementSibling;
+    if (modal && modal.matches('[data-share-modal]')){
+      modal.hidden = false;
+      document.body.style.overflow = 'hidden';
+      var first = modal.querySelector('.share-value');
+      if (first) first.focus();
+    }
+    return;
+  }
+
+  var closeBtn = e.target.closest ? e.target.closest('[data-share-close]') : null;
+  if (closeBtn){
+    var modalClose = closeBtn.closest('[data-share-modal]');
+    if (modalClose) modalClose.hidden = true;
+    document.body.style.overflow = '';
+    return;
+  }
+
+  if (e.target.matches && e.target.matches('[data-share-modal]')){
+    e.target.hidden = true;
+    document.body.style.overflow = '';
+    return;
+  }
+
+  var btn = e.target.closest ? e.target.closest('[data-copy-share]') : null;
+  if (!btn) return;
+  var row = btn.closest('.share-row');
+  if (!row) return;
+  var field = row.querySelector('.share-value, .share-embed-code');
+  if (!field) return;
+  var text = field.value !== undefined ? field.value : field.textContent;
+  if (!text) return;
+
+  function done(){
+    var old = btn.textContent;
+    btn.textContent = 'Copied';
+    setTimeout(function(){ btn.textContent = old; }, 1500);
+  }
+
+  function fallbackCopy(value){
+    var area = document.createElement('textarea');
+    area.value = value;
+    area.setAttribute('readonly','');
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.appendChild(area);
+    area.select();
+    try { document.execCommand('copy'); done(); }
+    finally { document.body.removeChild(area); }
+  }
+
+  if (navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(text).then(done, function(){ fallbackCopy(text); });
+  } else {
+    fallbackCopy(text);
+  }
+});
+
+document.addEventListener('keydown', function(e){
+  if (e.key !== 'Escape') return;
+  document.querySelectorAll('[data-share-modal]:not([hidden])').forEach(function(modal){ modal.hidden = true; });
+  document.body.style.overflow = '';
+});
+</script>
 </body>
 </html>
 """
@@ -2118,6 +2229,31 @@ VIDEO_BLOCK = """
       <a class="listen rounded-2xl shadow-xl transition-all duration-300" href="{{ v }}" target="_blank" rel="noopener">Watch music video</a>
     {% endif %}
   {% endfor %}
+{% endmacro %}
+"""
+
+
+SHARE_BLOCK = """
+{% macro share() %}
+<button class="share-trigger" type="button" data-share-open aria-haspopup="dialog">Share</button>
+
+{% set embed_code = '<iframe src="' ~ request.url ~ '" title="Underground Catalog" width="100%" height="500" frameborder="0" loading="lazy"></iframe>' %}
+<div class="share-modal" data-share-modal hidden>
+  <div class="share-dialog" role="dialog" aria-modal="true" aria-labelledby="share-dialog-title">
+    <button class="share-close" type="button" data-share-close aria-label="Close share window">×</button>
+    <h2 id="share-dialog-title">Share</h2>
+    <div class="share-row">
+      <input class="share-value" type="text" readonly value="{{ request.url }}" aria-label="Page link">
+      <button class="share-copy" type="button" data-copy-share>Copy</button>
+    </div>
+
+    <p class="share-embed-label">Underground Catalog Embed</p>
+    <div class="share-row">
+      <textarea class="share-embed-code" readonly aria-label="Underground Catalog embed code">{{ embed_code }}</textarea>
+      <button class="share-copy" type="button" data-copy-share>Copy</button>
+    </div>
+  </div>
+</div>
 {% endmacro %}
 """
 
@@ -2262,6 +2398,7 @@ ARTIST = """
 {% import "platforms.html" as ui %}
 {% import "cover.html" as art %}
 {% import "credit-hover.html" as credit %}
+{% import "share.html" as share %}
 {% block title %}{{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('index') }}">All Underground Rappers</a>{% endblock %}
 {% block content %}
@@ -2283,7 +2420,7 @@ ARTIST = """
       <li><b>Collective</b><span>
         {% for name in artist.collectives %}
           {% set link = collective_link(name) %}
-          {% if link %}<a href="{{ link }}">{{ name }}</a>{% else %}{{ name }}{% endif -%}
+          {% if link %}{{ credit.collective(name, link) }}{% else %}{{ name }}{% endif -%}
           {%- if not loop.last %}, {% endif %}
         {% endfor %}
       </span></li>
@@ -2297,7 +2434,10 @@ ARTIST = """
     </div>
     {% endif %}
 
-    {{ ui.platforms(artist.links) }}
+    <div class="share-inline-row">
+      {{ ui.platforms(artist.links) }}
+      {{ share.share() }}
+    </div>
 
     {% if producer_credits %}
     <div class="modetoggle rounded-2xl shadow-lg transition-all duration-300">
@@ -2485,6 +2625,26 @@ CREDIT_HOVER = """
 {{ name }}
 {% endif %}
 {% endmacro %}
+
+{% macro collective(name, link) %}
+{% set info = collective_hover_info(name) %}
+{% if info and link %}
+<span class="credit-hover">
+  <a href="{{ link }}">{{ name }}</a>
+  <span class="artist-hover-card" aria-hidden="true">
+    <span class="artist-hover-name">{{ info.name }}</span>
+    <span class="artist-hover-stats">{{ info.current_members }} current member{{ '' if info.current_members == 1 else 's' }}{% if info.former_members %} · {{ info.former_members }} former member{{ '' if info.former_members == 1 else 's' }}{% endif %}</span>
+    {% if has_image(info.image) %}
+      <img class="artist-hover-image" src="{{ url_for('image', filename=info.image) }}" alt="">
+    {% else %}
+      <span class="artist-hover-image artist-hover-placeholder">{{ info.name[:2]|upper }}</span>
+    {% endif %}
+  </span>
+</span>
+{% else %}
+{{ name }}
+{% endif %}
+{% endmacro %}
 """
 
 PROJECT = """
@@ -2494,6 +2654,7 @@ PROJECT = """
 {% import "listen.html" as play %}
 {% import "video.html" as mv %}
 {% import "credit-hover.html" as credit %}
+{% import "share.html" as share %}
 {% block title %}{{ project.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('artist', slug=artist.slug) }}">Back to {{ artist.name }}</a>{% endblock %}
 {% block content %}
@@ -2504,7 +2665,10 @@ PROJECT = """
     <p class="kindline">{{ project.kind }}{% if project.year %} · {{ project.year }}{% endif %}
       · {{ artist.name }}
       {%- if project.collab %} · with {% for c in project.collab %}{% set link = artist_link(c) %}{% if link %}{{ credit.artist(c, link) }}{% else %}{{ c }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</p>
-    {{ play.listen(project.url) }}
+    <div class="share-play-row">
+      {{ play.listen(project.url) }}
+      {{ share.share() }}
+    </div>
 
     {% if project.tracks %}
     <ol class="tracklist">
@@ -2586,6 +2750,7 @@ SINGLE = """
 
 COLLECTIVE = """
 {% extends "layout.html" %}
+{% import "credit-hover.html" as credit %}
 {% block title %}{{ collective.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('index') }}">All Underground Rappers</a>{% endblock %}
 {% block content %}
@@ -2606,8 +2771,9 @@ COLLECTIVE = """
 {% if collective.current_members %}
 <ul class="members">
   {% for m in collective.current_members %}
+    {% set artist = artist_link(m) %}
     {% set link = member_link(m) %}
-    <li>{% if link %}<a href="{{ link }}">{{ m }}</a>{% else %}{{ m }}{% endif %}</li>
+    <li>{% if artist %}{{ credit.artist(m, artist) }}{% elif link %}<a href="{{ link }}">{{ m }}</a>{% else %}{{ m }}{% endif %}</li>
   {% endfor %}
 </ul>
 {% else %}
@@ -2619,8 +2785,9 @@ COLLECTIVE = """
   <span>{{ collective.former_members|length }}</span></div>
 <ul class="members">
   {% for m in collective.former_members %}
+    {% set artist = artist_link(m) %}
     {% set link = member_link(m) %}
-    <li>{% if link %}<a href="{{ link }}">{{ m }}</a>{% else %}{{ m }}{% endif %}</li>
+    <li>{% if artist %}{{ credit.artist(m, artist) }}{% elif link %}<a href="{{ link }}">{{ m }}</a>{% else %}{{ m }}{% endif %}</li>
   {% endfor %}
 </ul>
 {% endif %}
@@ -2687,7 +2854,7 @@ CONTENT_WARNING = """
 <main class="info-page">
   <div class="warning-note rounded-2xl shadow-xl transition-all duration-300">
     <h1>Content Warning</h1>
-    <p>Underground Catalog is just a place to look up producers, tracks, and where to listen to underground rap tracks. All track and project titles are artistic expressions. This site does not host any mp3s or downloads for copyrighted music, only SoundCloud or YouTube embeds or other links like Spotify and YouTube Music to listen to the tracks.</p>
+    <p>Underground Catalog is just a place to look up producers, tracks, and where to listen to underground rap tracks. All track titles, project titles, track covers, and project covers are artistic expressions. This site does not host any mp3s or downloads for copyrighted music, only SoundCloud or YouTube embeds or other links like Spotify and YouTube Music to listen to the tracks.</p>
     <p>If you or someone you know is in distress or needs support, free and confidential help is available 24/7. Please connect with your local crisis lifeline or text HOME to 741741.</p>
   </div>
 </main>
@@ -2712,6 +2879,7 @@ app.jinja_loader = DictLoader({
     "listen.html": LISTEN_BLOCK,
     "video.html": VIDEO_BLOCK,
     "credit-hover.html": CREDIT_HOVER,
+    "share.html": SHARE_BLOCK,
     "index.html": INDEX,
     "artist.html": ARTIST,
     "project.html": PROJECT,

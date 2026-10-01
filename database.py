@@ -1161,7 +1161,59 @@ ARTISTS = [
          },
          
     ],
-    },    
+    },
+ {
+     "name": "perc40",
+     "image": "perc40.jpg",                      
+     "aliases": ["808Escobar",],                    
+     "dob": "October 11, 2002",                        
+     "links": {
+         "spotify": "https://open.spotify.com/artist/5NAQeD4ZZVx75VV164Fnuz",
+         "youtube_music": "https://music.youtube.com/channel/UCfaiB4VQ1vrc4INnbFrrezQ",
+         "soundcloud": "https://soundcloud.com/perc40",
+     },
+     "projects": [
+         {
+             "title": "Flesh Wound",
+             "kind": "Album",          
+             "year": "August 29, 2025",
+             "cover": "perc40 - Flesh Wound.jpg",              
+	         "url": "https://music.youtube.com/playlist?list=OLAK5uy_l-v6-N78AIIiN2r64SmkIrf1I6wkYEJzo",
+             "tracks": [
+                       "my way (feat. OsamaSon) (prod. perc40, ohsxnta)",
+	                   "a bug's life (feat. thr33) (prod. perc40)",
+	                   "wish u well (feat. 1oneam) (prod. perc40, 1oneam)",
+                       "another day (feat. Okaymar) (prod. perc40)",
+                       "favorite song (feat. ohsxnta, OsamaSon) (prod. perc40)",
+	                   "battle scars (feat. BLUEHUNNIDKB) (prod. perc40)",
+	                   "jason (feat. 1oneam) (prod. perc40)",
+                       "pain (feat. yuke) (prod. perc40)",
+                       "tony soprano (feat. luracks) (prod. perc40)",
+                       "foreign words (feat. OsamaSon) (prod. perc40)",
+                       "wrong one (feat. wildkarduno) (prod. perc40)",
+                       "penthouse keys (feat. 1oneam) (prod. perc40)",
+                       "never no fraud (feat. Smokingskul) (prod. perc40)",
+                       "change (feat. thr33) (prod. perc40)",
+                       "right hand (feat. Okaymar) (prod. perc40)",
+                       "stoopid (feat. Serane) (prod. perc40)",
+                       "get mogged (feat. ohsxnta, OsamaSon) (prod. perc40)",
+                       "2 sticks (feat. 1oneam) (prod. perc40, ohsxnta)",
+                       "burnt up (feat. OsamaSon) (prod. perc40)",
+                       "stay the night (feat. 1oneam, ohsxnta) (prod. perc40)",
+             ],
+         },
+
+     ],
+     "singles": [
+         {
+             "title": "",
+             "year": "",
+             "cover": "",
+             "url": "",
+         },
+     ],
+ },
+    
  {
      "name": "bleood",
      "image": "bleood.gif",                      # file name inside images/
@@ -3780,6 +3832,74 @@ ARTISTS = [
              "url": "https://soundcloud.com/ohsxnta/i-want-my-heart-back",
              "music_video": "https://www.youtube.com/watch?v=cKVzhiG5efk",
          },       
+     ],
+ },
+ {
+     "name": "Okaymar",
+     "image": "Okaymar.gif",                      
+     "aliases": ["",],                    
+     "dob": "October 16, 2001",
+     "collectives": "Slime Krew",
+     "links": {
+         "spotify": "https://open.spotify.com/artist/1IftlrOYVKoySjPYWNGO7K",
+         "youtube_music": "https://music.youtube.com/channel/UCdrwsS4OwpITYecyzfqwOMg",
+         "soundcloud": "https://soundcloud.com/okaymar",
+     },
+     "projects": [
+         {
+             "title": "lost files",
+             "kind": "Album",          
+             "year": "February 15, 2022",
+             "cover": "Okaymar - lost files.jpg",              
+	         "url": "https://soundcloud.com/1okaymar/sets/lost-files",
+             "tracks": [
+                       "weirdo (prod. twentywrld)",
+	                   "g6 (prod. tdf)",
+	                   "studio (prod. tdf, twentywrld)",
+                       "juco (prod. tdf)",
+                       "go ahead (prod. fakekickin)",
+	                   "haha (prod. Toren Berios)",
+	                   "murder muzik remix (prod. Rok, bart how, 4VRLIT)",
+                       "top this (feat. Khalifsb) (prod. tdf)",
+                       "undercover (prod. tdf)",
+                       "dior (feat. Kankan) (prod. BenjiCold)",
+             ],
+         },
+
+
+     ],
+     "singles": [
+         {
+             "title": "Yellow (prod. perc40)",
+             "year": "November 5, 2021",
+             "cover": "Okaymar - Yellow.jpg",
+             "url": "https://soundcloud.com/okaymar/yellow-prod-perc40",
+         },
+         {
+             "title": "Sike (prod. tdf)",
+             "year": "December 10, 2021",
+             "cover": "Okaymar - Sike.jpg",
+             "url": "https://soundcloud.com/okaymar/sike-prod-tdf-1",
+         },
+         {
+             "title": "Fun (feat. 1oneam) (prod. perc40)",
+             "year": "December 16, 2021",
+             "cover": "Okaymar - Fun.jpg",
+             "url": "https://soundcloud.com/okaymar/fun-ft-1oneamprod-perc40",
+         },
+         {
+             "title": "Change (prod. Rare1)",
+             "year": "January 9, 2022",
+             "cover": "Okaymar - Change.jpg",
+             "url": "https://soundcloud.com/okaymar/change-prod-rare1",
+         },
+         {
+             "title": "Chef (prod. tdf)",
+             "year": "February 4, 2022",
+             "cover": "Okaymar - Chef.jpg",
+             "url": "https://soundcloud.com/okaymar/chef-prod-tdf",
+         },
+         
      ],
  },
  
