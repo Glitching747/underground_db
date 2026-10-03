@@ -998,7 +998,7 @@ a.platform:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .credit-hover{position:relative;display:inline-block}
 .credit-hover > a{position:relative;z-index:2;color:var(--blue);text-decoration:none;border-bottom:1px solid var(--blue)}
 .credit-hover > a:hover{color:var(--red);border-color:var(--red)}
-.artist-hover-card{position:absolute;z-index:1000;left:50%;bottom:calc(100% + 12px);transform:translateX(-50%) translateY(5px);width:230px;padding:14px;background:var(--paper);color:var(--ink);border:1px solid var(--border-soft);border-radius:var(--radius-2xl);box-shadow:var(--shadow-deep);opacity:0;visibility:hidden;pointer-events:none;transition:all .3s ease}
+.artist-hover-card{position:absolute;z-index:10000;left:50%;bottom:calc(100% + 12px);transform:translateX(-50%) translateY(5px);width:230px;padding:14px;background:var(--paper);color:var(--ink);border:1px solid var(--border-soft);border-radius:var(--radius-2xl);box-shadow:var(--shadow-deep);opacity:0;visibility:hidden;pointer-events:none;transition:all .3s ease}
 .credit-hover:hover .artist-hover-card,.credit-hover:focus-within .artist-hover-card{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}
 .artist-hover-name{font-family:'Archivo Black',Archivo,sans-serif;font-size:20px;line-height:1.05;margin:0 0 4px;overflow-wrap:anywhere}
 .artist-hover-stats{display:block;font-size:12px;color:var(--mute);margin:0 0 10px}
@@ -2475,33 +2475,26 @@ ARTIST = """
 </div>
 
 <div id="album-releases">
-<div id="projects-list">
+<div id="projects-list" class="space-y-4">
 {% for p in sorted_projects %}
-<article class="release">
-  <div>{{ art.cover(p.cover, p.title ~ ' cover') }}</div>
-  <div>
-    <h3><a href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">{{ p.title }}</a></h3>
-    <p class="kindline">{{ p.kind }}{% if p.year %} · {{ p.year }}{% endif %}
-      {%- if p.tracks %} · {{ p.tracks|length }} tracks{% endif -%}
-      {%- if p.owner_slug %} · with {% set owner_link = url_for('artist', slug=p.owner_slug) %}{{ credit.artist(p.owner_name, owner_link) }}{% endif %}</p>
+<article class="release !flex !grid-cols-none !gap-0 !p-0 !m-0 !border-0 group relative z-0 overflow-visible rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--paper)] shadow-lg transition-all duration-300 hover:z-20 hover:-translate-y-1 hover:shadow-2xl">
+  <div class="flex w-full min-w-0 items-center gap-5 p-4 sm:gap-6 sm:p-5">
+    <a class="block w-28 h-28 sm:w-36 sm:h-36 !shrink-0 overflow-hidden rounded-2xl" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}" aria-label="View {{ p.title }}">
+      {{ art.cover(p.cover, p.title ~ ' cover') }}
+    </a>
 
-    {% if p.tracks %}
-    <ol class="tracklist">
-      {% for t in p.tracks %}
-      <li>
-        <div class="track-row">
-          <span class="num">{{ '%02d' % t.number }}</span>
-          <span>
-            <a class="track-main" href="{{ track_hrefs['track:' ~ p.slug ~ ':' ~ t.index] }}">{{ t.title }}</a>
-            {% if t.features %}<span class="feat"> with {% for f in t.features %}{% set link = artist_link(f) %}{% if link %}{{ credit.artist(f, link) }}{% else %}{{ f }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</span>{% endif %}
-          </span>
+    <div class="min-w-0 flex-1 py-1">
+      <div class="flex items-start gap-3">
+        <div class="min-w-0 flex-1">
+          <h3 class="!m-0 !text-2xl sm:!text-3xl !leading-tight !font-black truncate">
+            <a class="no-underline transition-colors duration-200 hover:!text-[var(--red)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">{{ p.title }}</a>
+          </h3>
+          <p class="kindline !m-1 !mt-2 !text-xs sm:!text-sm !font-semibold">{{ p.kind }}{% if p.year %} · {{ p.year }}{% endif %}{% if p.tracks %} · {{ p.tracks|length }} tracks{% endif %}{% if p.owner_slug %} · with {% set owner_link = url_for('artist', slug=p.owner_slug) %}{{ credit.artist(p.owner_name, owner_link) }}{% endif %}</p>
         </div>
-      </li>
-      {% endfor %}
-    </ol>
-    {% else %}
-    <p class="empty">Tracklist not added yet.</p>
-    {% endif %}
+        <a class="mt-1 hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-xl text-[color:var(--mute)] transition-all duration-200 group-hover:border-[color:var(--red)] group-hover:text-[color:var(--red)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}" aria-label="Open {{ p.title }}">→</a>
+      </div>
+      <a class="mt-3 inline-flex items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm font-bold text-[color:var(--blue)] transition-all duration-200 hover:border-[color:var(--border-soft)] hover:bg-black/5 hover:text-[color:var(--red)] dark:hover:bg-white/5" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">View project <span class="transition-transform duration-200 group-hover:translate-x-1">→</span></a>
+    </div>
   </div>
 </article>
 {% else %}
