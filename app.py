@@ -2,6 +2,7 @@ import json
 import os
 import random
 import re
+from datetime import datetime
 from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from flask import Flask, abort, redirect, render_template, request, send_from_directory, url_for
@@ -73,6 +74,17 @@ def member_link(name):
     return url_for("producer", slug=entry["slug"]) if entry else None
 
 
+def genius_search_url(artist_name, title=None):
+    """Build a Genius search URL for the artist plus the page's title."""
+    parts = [str(artist_name or "").strip()]
+    if title:
+        title = str(title).strip()
+        if title:
+            parts.append(title)
+    query = " ".join(part for part in parts if part)
+    return "https://genius.com/search?q=" + quote(query, safe="")
+
+
 def artist_hover_info(name):
     """Small artist-page summary used by feature/producer hover cards."""
     match = database.find_artist_by_name(name)
@@ -107,6 +119,7 @@ def collective_hover_info(name):
 
 
 app.jinja_env.globals["artist_link"] = artist_link
+app.jinja_env.globals["genius_search_url"] = genius_search_url
 app.jinja_env.globals["artist_hover_info"] = artist_hover_info
 app.jinja_env.globals["collective_hover_info"] = collective_hover_info
 app.jinja_env.globals["collective_link"] = collective_link
@@ -431,6 +444,78 @@ def sort_by_date(items):
     return sorted(items, key=lambda i: database.year_sort_key(i.get("year")))
 
 
+_DATE_PAGE_FORMATS = (
+    "%B %d, %Y",
+    "%B %d %Y",
+    "%b %d, %Y",
+    "%b %d %Y",
+    "%Y-%m-%d",
+    "%Y/%m/%d",
+    "%m/%d/%Y",
+)
+
+
+def parse_catalog_full_date(value):
+    """Parse the full catalog date formats that can map to a month/year page."""
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in _DATE_PAGE_FORMATS:
+        try:
+            return datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def date_page_slug(value):
+    """Return e.g. 'January 2023' -> 'january-2023', or None if undated."""
+    parsed = parse_catalog_full_date(value)
+    if not parsed:
+        return None
+    return parsed.strftime("%B-%Y").lower()
+
+
+def date_page_label(value):
+    parsed = parse_catalog_full_date(value)
+    return parsed.strftime("%B %Y") if parsed else str(value or "")
+
+
+def date_page_url(value):
+    slug = date_page_slug(value)
+    return url_for("date_page", date_slug=slug) if slug else None
+
+
+def build_date_releases(month, year):
+    """Collect every project and single released in one catalog month/year."""
+    projects = []
+    singles = []
+    for artist in database.get_artists():
+        for project in artist["projects"]:
+            parsed = parse_catalog_full_date(project.get("year"))
+            if parsed and parsed.month == month and parsed.year == year:
+                item = dict(project)
+                item["artist_slug"] = artist["slug"]
+                item["artist_name"] = artist["name"]
+                projects.append(item)
+        for single in artist["singles"]:
+            parsed = parse_catalog_full_date(single.get("year"))
+            if parsed and parsed.month == month and parsed.year == year:
+                item = dict(single)
+                item["artist_slug"] = artist["slug"]
+                item["artist_name"] = artist["name"]
+                singles.append(item)
+
+    projects.sort(key=lambda item: (database.year_sort_key(item.get("year")), item["artist_name"].lower(), item["title"].lower()))
+    singles.sort(key=lambda item: (database.year_sort_key(item.get("year")), item["artist_name"].lower(), item["title"].lower()))
+    return projects, singles
+
+
+app.jinja_env.globals["date_page_slug"] = date_page_slug
+app.jinja_env.globals["date_page_url"] = date_page_url
+app.jinja_env.globals["date_page_label"] = date_page_label
+
+
 @app.route("/random-song")
 def random_song():
     # Use the same canonical track/single list as search, so duplicate
@@ -483,6 +568,33 @@ def build_playable_songs():
 @app.route("/api/playable")
 def api_playable():
     return {"songs": build_playable_songs()}
+
+
+@app.route("/date/<date_slug>")
+def date_page(date_slug):
+    """Show every catalog release from a specific month and year."""
+    match = re.fullmatch(r"([a-z]+)-(\d{4})", date_slug.lower())
+    if not match:
+        abort(404)
+    month_name, year_text = match.groups()
+    try:
+        month = datetime.strptime(month_name, "%B").month
+    except ValueError:
+        abort(404)
+    year = int(year_text)
+
+    projects, singles = build_date_releases(month, year)
+    if not projects and not singles:
+        abort(404)
+
+    label = datetime(year, month, 1).strftime("%B %Y")
+    return render_template(
+        "date.html",
+        date_label=label,
+        date_slug=date_slug.lower(),
+        date_projects=projects,
+        date_singles=singles,
+    )
 
 
 @app.route("/artist/<slug>")
@@ -568,6 +680,17 @@ def producer(slug):
     record = database.get_producer(slug)
     if record is None:
         abort(404)
+
+    # Keep producer credits organized newest-to-oldest by their actual
+    # catalog date.  The database already provides the canonical date
+    # sorting helper used elsewhere in the app.
+    record = dict(record)
+    record["credits"] = sorted(
+        record.get("credits") or [],
+        key=lambda c: database.year_sort_key(c.get("year")),
+        reverse=True,
+    )
+
     return render_template("producer.html", producer=record)
 
 
@@ -616,7 +739,8 @@ LAYOUT = """
 :root{
   --paper:#EDE7DC;
   --ink:#16130F;
-  --red:#E1341E;
+  --red:#B80000;
+  --red-bright:#FF0000;
   --blue:#1B4AA0;
   --mute:#8A8275;
   --rule:rgba(22,19,15,.18);
@@ -634,7 +758,8 @@ html{
   color-scheme:light;
   --paper:#EDE7DC;
   --ink:#16130F;
-  --red:#E1341E;
+  --red:#B80000;
+  --red-bright:#FF0000;
   --blue:#1B4AA0;
   --mute:#8A8275;
   --rule:rgba(22,19,15,.18);
@@ -645,7 +770,8 @@ html.light{
   color-scheme:light;
   --paper:#EDE7DC !important;
   --ink:#16130F !important;
-  --red:#E1341E !important;
+  --red:#B80000 !important;
+  --red-bright:#FF0000 !important;
   --blue:#1B4AA0 !important;
   --mute:#8A8275 !important;
   --rule:rgba(22,19,15,.18) !important;
@@ -656,7 +782,8 @@ html.dark{
   color-scheme:dark;
   --paper:#11110F !important;
   --ink:#F2EEE5 !important;
-  --red:#FF4A32 !important;
+  --red:#B80000 !important;
+  --red-bright:#FF0000 !important;
   --blue:#5D8CFF !important;
   --mute:#AAA49A !important;
   --rule:rgba(242,238,229,.20) !important;
@@ -827,7 +954,7 @@ html.dark .theme-toggle .sun{display:inline}
 .masthead .count{color:var(--mute);font-size:14px}
 .backlink{margin-left:auto;font-size:14px;color:var(--blue);text-decoration:none;
   border-bottom:1px solid var(--blue);padding-bottom:1px}
-.backlink:hover{color:var(--red);border-color:var(--red)}
+.backlink:hover{color:var(--red-bright);border-color:var(--red-bright)}
 
 /* shared bits */
 .cover{display:block;width:100%;aspect-ratio:1;object-fit:cover;
@@ -881,7 +1008,7 @@ html.singles-only .album-track-credit{display:none}
 .newest-item .cover{width:52px;height:52px;box-shadow:var(--shadow-card);border-width:1px}
 .newest-item .cover.placeholder span{font-size:9px}
 .newest-title{font-family:"Archivo Black",sans-serif;font-size:14px;line-height:1.2;margin:0 0 3px}
-.newest-item:hover .newest-title{color:var(--red)}
+.newest-item:hover .newest-title{color:var(--red-bright)}
 .newest-meta{font-size:12px;color:var(--mute);margin:0;line-height:1.4}
 
 
@@ -892,7 +1019,7 @@ html.singles-only .album-track-credit{display:none}
 .top-producers-list .rank{font-family:"Archivo Black",sans-serif;color:var(--blue);font-size:13px;min-width:20px}
 .top-producers-list .pname{font-weight:600;font-size:14px;flex:1}
 .top-producers-list .pcount{color:var(--mute);font-size:12px;white-space:nowrap}
-.top-producers-list a:hover .pname{color:var(--red)}
+.top-producers-list a:hover .pname{color:var(--red-bright)}
 
 .roster{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule);display:flow-root}
 .roster li{border-bottom:1px solid var(--rule)}
@@ -914,7 +1041,7 @@ html.singles-only .album-track-credit{display:none}
 .facts li{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--rule)}
 .facts b{font-weight:600;min-width:104px;color:var(--mute)}
 .facts a{color:var(--blue);text-decoration:none;border-bottom:1px solid var(--blue)}
-.facts a:hover{color:var(--red);border-color:var(--red)}
+.facts a:hover{color:var(--red-bright);border-color:var(--red-bright)}
 .artist-rip{display:flex;align-items:center;gap:14px;margin:0 0 24px;padding:10px 0}
 .artist-rip img{width:58px;height:58px;object-fit:cover;border:1px solid var(--border-soft);border-radius:var(--radius-2xl);box-shadow:var(--shadow-card);flex:0 0 auto;transition:all .3s ease}
 .artist-rip span{font-weight:600;line-height:1.25}
@@ -955,7 +1082,7 @@ html.singles-only .album-track-credit{display:none}
 .members{list-style:none;margin:0;padding:0}
 .members li{padding:8px 0;border-bottom:1px solid var(--rule)}
 .members a{color:var(--blue);text-decoration:none;border-bottom:1px solid var(--blue)}
-.members a:hover{color:var(--red);border-color:var(--red)}
+.members a:hover{color:var(--red-bright);border-color:var(--red-bright)}
 
 /* platform links */
 .platforms{display:flex;gap:12px;flex-wrap:wrap;margin-top:22px}
@@ -978,39 +1105,70 @@ a.platform:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .release:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
 .release h3{font-size:32px;line-height:1.05}
 .release h3 a{text-decoration:none}
-.release h3 a:hover{color:var(--red)}
+.release h3 a:hover{color:var(--red-bright)}
 .kindline{margin:6px 0 16px;font-size:14px;color:var(--blue);font-weight:600}
 .kindline a{text-decoration:none;border-bottom:1px solid var(--blue)}
-.kindline a:hover{color:var(--red);border-color:var(--red)}
+.kindline a:hover{color:var(--red-bright);border-color:var(--red-bright)}
 .tracklist{list-style:none;margin:20px 0 0;padding:0;border-top:1px solid var(--rule)}
 .tracklist li{border-bottom:1px solid var(--rule)}
 .track-row{display:grid;grid-template-columns:34px 1fr;gap:12px;padding:10px 8px;align-items:baseline;border-radius:calc(var(--radius-2xl) - 4px);transition:all .3s ease}
 .track-row:hover{background:rgba(225,52,30,.1);box-shadow:var(--shadow-card)}
 .track-main{text-decoration:none}
-.track-main:hover{color:var(--red)}
+.track-main:hover{color:var(--red-bright)}
 .track-main:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .tracklist .num{color:var(--blue);font-variant-numeric:tabular-nums;font-size:14px}
 .tracklist .feat{color:var(--mute)}
 .tracklist .feat a,.tracklist .credit-hover > a{color:var(--blue) !important;text-decoration:none;border-bottom:1px solid var(--blue)}
-.tracklist .feat a:hover,.tracklist .credit-hover > a:hover{color:var(--red) !important;border-color:var(--red)}
+.tracklist .feat a:hover,.tracklist .credit-hover > a:hover{color:var(--red-bright) !important;border-color:var(--red-bright)}
 
 /* artist/producer hover cards */
 .credit-hover{position:relative;display:inline-block}
 .credit-hover > a{position:relative;z-index:2;color:var(--blue);text-decoration:none;border-bottom:1px solid var(--blue)}
-.credit-hover > a:hover{color:var(--red);border-color:var(--red)}
-.artist-hover-card{position:absolute;z-index:10000;left:50%;bottom:calc(100% + 12px);transform:translateX(-50%) translateY(5px);width:230px;padding:14px;background:var(--paper);color:var(--ink);border:1px solid var(--border-soft);border-radius:var(--radius-2xl);box-shadow:var(--shadow-deep);opacity:0;visibility:hidden;pointer-events:none;transition:all .3s ease}
+.credit-hover > a:hover{color:var(--red-bright);border-color:var(--red-bright)}
+.artist-hover-card{position:absolute;z-index:100000;left:50%;bottom:calc(100% + 12px);transform:translateX(-50%) translateY(5px);width:230px;padding:14px;background:var(--paper);color:var(--ink);border:1px solid var(--border-soft);border-radius:var(--radius-2xl);box-shadow:var(--shadow-deep);opacity:0;visibility:hidden;pointer-events:none;transition:all .3s ease}
 .credit-hover:hover .artist-hover-card,.credit-hover:focus-within .artist-hover-card{opacity:1;visibility:visible;transform:translateX(-50%) translateY(0)}
 .artist-hover-name{font-family:'Archivo Black',Archivo,sans-serif;font-size:20px;line-height:1.05;margin:0 0 4px;overflow-wrap:anywhere}
 .artist-hover-stats{display:block;font-size:12px;color:var(--mute);margin:0 0 10px}
 .artist-hover-image{display:block;width:100%;aspect-ratio:1/1;object-fit:cover;border:1px solid var(--border-soft);border-radius:calc(var(--radius-2xl) - 4px);background:var(--rule);transition:all .3s ease}
 .artist-hover-placeholder{display:flex;align-items:center;justify-content:center;font-family:'Archivo Black',Archivo,sans-serif;font-size:38px;color:var(--mute)}
 
-/* singles grid */
-.singles{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:30px}
-.singles a{text-decoration:none;display:block}
-.singles .cover{box-shadow:var(--shadow-card),0 0 0 1px rgba(27,74,160,.12)}
-.singles a:hover .cover{box-shadow:var(--shadow-deep),0 0 0 1px rgba(225,52,30,.15)}
-.singles h3{font-family:'Inter',sans-serif;font-weight:900;font-size:18px;margin-top:14px;letter-spacing:-0.01em;}
+/* singles grid — compact cards, intentionally different from the larger album releases */
+.singles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.single-card{position:relative;display:grid;grid-template-columns:96px minmax(0,1fr) 38px;align-items:center;gap:16px;min-height:128px;padding:15px;border:1px solid var(--border-soft);border-radius:22px;background:linear-gradient(135deg,var(--paper),rgba(255,255,255,.42));box-shadow:var(--shadow-card);overflow:visible;transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease}
+.single-card:hover{transform:translateY(-3px);box-shadow:var(--shadow-deep);border-color:rgba(225,52,30,.35);z-index:20}
+.single-card .cover-link{display:block;border-radius:16px;min-width:0}
+.single-card .cover{width:96px;height:96px;border-radius:16px;box-shadow:var(--shadow-card),0 0 0 1px rgba(27,74,160,.10);transition:transform .22s ease,box-shadow .22s ease}
+.single-card:hover .cover{transform:scale(1.025);box-shadow:var(--shadow-deep),0 0 0 1px rgba(225,52,30,.18)}
+.single-copy{min-width:0}
+.single-type{display:inline-flex;align-items:center;gap:5px;margin:0 0 6px;padding:3px 8px;border:1px solid var(--border-soft);border-radius:999px;color:var(--blue);font-size:10px;font-weight:900;letter-spacing:.08em;text-transform:uppercase;background:var(--paper)}
+.single-title{display:block;width:max-content;max-width:100%;font-family:'Inter',sans-serif;font-weight:900;font-size:19px;line-height:1.1;margin:0 0 6px;letter-spacing:-0.02em;color:var(--ink);text-decoration:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.single-title:hover{color:var(--red-bright)}
+.single-card .meta{display:block;font-size:12px;line-height:1.45;color:var(--mute);margin:0;white-space:nowrap;overflow:visible;text-overflow:ellipsis}
+.single-card .meta a{color:var(--blue);text-decoration:none;border-bottom:1px solid transparent}
+.single-card .meta a:hover{color:var(--red-bright);border-color:var(--red-bright)}
+.single-arrow{display:flex;align-items:center;justify-content:center;width:38px;height:38px;border:1px solid var(--border-soft);border-radius:999px;color:var(--blue);font-size:18px;text-decoration:none;transition:all .22s ease}
+.single-card:hover .single-arrow{color:var(--red-bright);border-color:var(--red-bright);transform:translateX(2px)}
+
+@media (prefers-color-scheme:dark){
+  .single-card{background:linear-gradient(135deg,var(--paper),rgba(255,255,255,.035))}
+}
+
+/* month/year release pages */
+.date-page-head{display:flex;align-items:end;justify-content:space-between;gap:24px;flex-wrap:wrap;margin-bottom:8px}
+.date-page-kicker{margin:0 0 6px;color:var(--blue);font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.08em}
+.date-page-head h1{font-size:clamp(40px,7vw,72px);line-height:.94;margin:0}
+.date-page-count{color:var(--mute);font-size:14px;padding-bottom:5px}
+.date-section-head{margin-top:38px}
+.date-release .kindline{margin-bottom:0}
+/* Date-page project cards use their own full-width Tailwind layout;
+   do not inherit the artist-page two-column .release grid. */
+.date-release{display:block !important;grid-template-columns:none !important;padding:0 !important;margin-bottom:0 !important;border-bottom:0 !important}
+.date-release > div{width:100%}
+.date-release .kindline a{color:var(--blue);border-bottom:1px solid var(--blue)}
+.date-release .kindline a:hover{color:var(--red-bright);border-color:var(--red-bright)}
+.date-page-date-link{color:var(--blue)!important;text-decoration:none;border-bottom:1px solid var(--blue)!important}
+.date-page-date-link:hover{color:var(--red-bright)!important;border-color:var(--red-bright)!important}
+.date-singles .single-card{min-height:120px}
 
 /* detail pages */
 
@@ -1020,12 +1178,12 @@ a.platform:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .credits li{display:flex;gap:12px;padding:7px 0;border-bottom:1px solid var(--rule)}
 .credits b{font-weight:600;min-width:104px;color:var(--mute)}
 .credits a{color:var(--blue);text-decoration:none;border-bottom:1px solid var(--blue)}
-.credits a:hover{color:var(--red);border-color:var(--red)}
+.credits a:hover{color:var(--red-bright);border-color:var(--red-bright)}
 .listen{display:inline-block;margin-top:24px;padding:13px 20px;background:var(--ink);
   color:var(--paper);text-decoration:none;font-weight:600;border-radius:var(--radius-2xl);
   box-shadow:var(--shadow-deep);transition:all .3s ease}
-.listen:hover{background:var(--red);transform:translateY(-2px);box-shadow:var(--shadow-card)}
-.embed{margin-top:24px;max-width:480px;border-radius:var(--radius-2xl);overflow:hidden;box-shadow:var(--shadow-card);transition:all .3s ease}
+.listen:hover{background:var(--red-bright);transform:translateY(-2px);box-shadow:var(--shadow-card)}
+.embed{margin-top:24px;max-width:640px;border-radius:var(--radius-2xl);overflow:hidden;box-shadow:var(--shadow-card);transition:all .3s ease}
 .embed iframe{display:block;width:100%;border:0}
 .embed.video{max-width:640px}
 .embed.video iframe{aspect-ratio:16/9;height:auto}
@@ -1035,6 +1193,10 @@ a.platform:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
   .hero,.release,.detail{grid-template-columns:1fr;gap:24px}
   .portrait{max-width:280px}
   .cover{max-width:320px}
+  .singles{grid-template-columns:1fr}
+  .single-card{grid-template-columns:82px minmax(0,1fr) 34px;gap:12px;min-height:108px;padding:12px}
+  .single-card .cover{width:82px;height:82px}
+  .single-arrow{width:34px;height:34px}
   .roster a{grid-template-columns:60px 1fr;row-gap:4px}
   .roster .thumb{width:60px;height:60px}
   .roster .tally{grid-column:2;text-align:left}
@@ -1123,6 +1285,25 @@ html.dark .sp-q-thumb{background:rgba(0,0,0,.08)}
 .sp-toast{position:absolute;left:0;right:0;bottom:calc(100% + 10px);text-align:center;background:var(--red);color:#fff;border-radius:var(--radius-2xl);padding:9px 14px;box-shadow:var(--shadow-deep);font-weight:600}
 .sp-toast[hidden]{display:none}
 
+/* Genius search button */
+.genius-button{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:34px;height:34px;padding:0;
+  border:1px solid var(--border-soft);
+  border-radius:10px;
+  background:var(--button-bg);color:var(--button-fg);
+  box-shadow:var(--shadow-card);
+  text-decoration:none;
+  cursor:pointer;
+  transition:all .2s ease;
+  vertical-align:middle;
+}
+.genius-button:hover{transform:translateY(-1px);box-shadow:var(--shadow-deep);background:var(--button-bg);}
+.genius-button:active{transform:translateY(0);}
+.genius-button:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+.genius-button img{display:block;width:18px;height:18px;border-radius:50%;object-fit:cover;filter:invert(1);}
+html.dark .genius-button img{filter:none;}
+
 /* share / embed */
 .share-inline-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .share-inline-row .platforms{margin-top:22px}
@@ -1130,20 +1311,20 @@ html.dark .sp-q-thumb{background:rgba(0,0,0,.08)}
 .share-play-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .share-play-row .share-trigger{margin-top:24px}
 .share-trigger{border:1px solid var(--border-soft);border-radius:12px;background:var(--ink);color:var(--paper);padding:9px 14px;font:600 13px Archivo,"Helvetica Neue",Arial,sans-serif;cursor:pointer;box-shadow:var(--shadow-card);transition:all .2s ease}
-.share-trigger:hover{background:var(--red);transform:translateY(-1px);box-shadow:var(--shadow-deep)}
+.share-trigger:hover{background:var(--red-bright);transform:translateY(-1px);box-shadow:var(--shadow-deep)}
 .share-trigger:focus-visible,.share-copy:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
 .share-modal{position:fixed;inset:0;z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(0,0,0,.45);backdrop-filter:blur(3px)}
 .share-modal[hidden]{display:none}
 .share-dialog{position:relative;width:min(620px,calc(100vw - 32px));padding:20px;border:1px solid var(--border-soft);border-radius:18px;background:var(--surface);color:var(--ink);box-shadow:var(--shadow-deep)}
 .share-dialog h2{margin:0 42px 16px 0;font-size:18px;text-transform:uppercase;letter-spacing:.03em}
 .share-close{position:absolute;top:12px;right:12px;width:34px;height:34px;border:1px solid var(--border-soft);border-radius:10px;background:var(--ink);color:var(--paper);font:700 18px/1 Arial,sans-serif;cursor:pointer}
-.share-close:hover{background:var(--red)}
+.share-close:hover{background:var(--red-bright)}
 .share-row{display:flex;align-items:stretch;gap:8px}
 .share-value,.share-embed-code{flex:1;min-width:0;padding:10px 12px;border:1px solid var(--border-soft);border-radius:12px;background:var(--paper);color:var(--ink);font:13px/1.4 monospace;box-sizing:border-box}
 .share-value{overflow:auto;white-space:nowrap}
 .share-embed-code{min-height:82px;width:100%;resize:vertical;white-space:pre-wrap}
 .share-copy{flex:none;border:1px solid var(--border-soft);border-radius:12px;background:var(--ink);color:var(--paper);padding:10px 14px;font:600 13px Archivo,"Helvetica Neue",Arial,sans-serif;cursor:pointer;box-shadow:var(--shadow-card);transition:all .2s ease}
-.share-copy:hover{background:var(--red);transform:translateY(-1px)}
+.share-copy:hover{background:var(--red-bright);transform:translateY(-1px)}
 .share-embed-label{margin:18px 0 8px;font-size:13px;font-weight:600;color:var(--mute)}
 @media (max-width:640px){.share-row{flex-direction:column}.share-copy{width:100%}.share-modal{padding:12px}}
 </style>
@@ -2257,6 +2438,15 @@ SHARE_BLOCK = """
 {% endmacro %}
 """
 
+GENIUS_BLOCK = """
+{% macro button(artist_name, title) %}
+<a class="genius-button" href="{{ genius_search_url(artist_name, title) }}" target="_blank" rel="noopener" aria-label="Search {{ artist_name }} {{ title }} on Genius" title="Search on Genius">
+  <img src="https://genius.com/favicon.ico" alt="">
+</a>
+{% endmacro %}
+"""
+
+
 INDEX = """
 {% extends "layout.html" %}
 {% import "cover.html" as art %}
@@ -2326,8 +2516,13 @@ INDEX = """
         {% if a.aliases %}<br><span class="alias">AKA / FKA: {{ a.aliases|join(', ') }}</span>{% endif %}
       </span>
       <span class="tally">
-        {{ a.projects|length }} release{{ '' if a.projects|length == 1 else 's' }}
-        {%- if a.singles %} · {{ a.singles|length }} single{{ '' if a.singles|length == 1 else 's' }}{% endif %}
+        {% if a.projects %}
+          {{ a.projects|length }} release{{ '' if a.projects|length == 1 else 's' }}
+        {% endif %}
+        {% if a.projects and a.singles %} · {% endif %}
+        {% if a.singles %}
+          {{ a.singles|length }} single{{ '' if a.singles|length == 1 else 's' }}
+        {% endif %}
       </span>
     </a>
   </li>
@@ -2469,6 +2664,7 @@ ARTIST = """
 {% endif %}
 
 <div id="releases-view">
+{% if sorted_projects %}
 <div class="section-head" id="album-release-heading">
   <h2>Albums &amp; EPs</h2>
   <span>{{ sorted_projects|length }} release{{ '' if sorted_projects|length == 1 else 's' }}</span>
@@ -2487,40 +2683,42 @@ ARTIST = """
       <div class="flex items-start gap-3">
         <div class="min-w-0 flex-1">
           <h3 class="!m-0 !text-2xl sm:!text-3xl !leading-tight !font-black truncate">
-            <a class="no-underline transition-colors duration-200 hover:!text-[var(--red)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">{{ p.title }}</a>
+            <a class="no-underline transition-colors duration-200 hover:!text-[var(--red-bright)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">{{ p.title }}</a>
           </h3>
-          <p class="kindline !m-1 !mt-2 !text-xs sm:!text-sm !font-semibold">{{ p.kind }}{% if p.year %} · {{ p.year }}{% endif %}{% if p.tracks %} · {{ p.tracks|length }} tracks{% endif %}{% if p.owner_slug %} · with {% set owner_link = url_for('artist', slug=p.owner_slug) %}{{ credit.artist(p.owner_name, owner_link) }}{% endif %}</p>
+          <p class="kindline !m-1 !mt-2 !text-xs sm:!text-sm !font-semibold">{{ p.kind }}{% if p.year %} · {% set release_date_url = date_page_url(p.year) %}{% if release_date_url %}<a href="{{ release_date_url }}">{{ p.year }}</a>{% else %}{{ p.year }}{% endif %}{% endif %}{% if p.tracks %} · {{ p.tracks|length }} tracks{% endif %}{% if p.owner_slug %} · with {% set owner_link = url_for('artist', slug=p.owner_slug) %}{{ credit.artist(p.owner_name, owner_link) }}{% endif %}</p>
         </div>
-        <a class="mt-1 hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-xl text-[color:var(--mute)] transition-all duration-200 group-hover:border-[color:var(--red)] group-hover:text-[color:var(--red)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}" aria-label="Open {{ p.title }}">→</a>
+        <a class="mt-1 hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-xl text-[color:var(--mute)] transition-all duration-200 group-hover:border-[color:var(--red-bright)] group-hover:text-[color:var(--red-bright)]" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}" aria-label="Open {{ p.title }}">→</a>
       </div>
-      <a class="mt-3 inline-flex items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm font-bold text-[color:var(--blue)] transition-all duration-200 hover:border-[color:var(--border-soft)] hover:bg-black/5 hover:text-[color:var(--red)] dark:hover:bg-white/5" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">View project <span class="transition-transform duration-200 group-hover:translate-x-1">→</span></a>
+      <a class="mt-3 inline-flex items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm font-bold text-[color:var(--blue)] transition-all duration-200 hover:border-[color:var(--border-soft)] hover:bg-black/5 hover:text-[color:var(--red-bright)] dark:hover:bg-white/5" href="{{ url_for('project', slug=p.owner_slug or artist.slug, project_slug=p.slug) }}">View project <span class="transition-transform duration-200 group-hover:translate-x-1">→</span></a>
     </div>
   </div>
 </article>
-{% else %}
-<p class="empty">No albums or EPs logged yet.</p>
 {% endfor %}
 </div>
 </div>
+{% endif %}
 
 {% if sorted_singles %}
 <div class="section-head"><h2>Singles</h2>
   <span>{{ sorted_singles|length }} track{{ '' if sorted_singles|length == 1 else 's' }}</span></div>
 <div class="singles" id="singles-grid">
   {% for s in sorted_singles %}
-  {% if s.owner_slug %}
-  <a href="{{ url_for('single', slug=s.owner_slug, single_slug=s.slug) }}">
-    {{ art.cover(s.cover, s.title ~ ' cover', 'blue') }}
-    <h3>{{ s.title }}</h3>
-    <p class="meta">{% if s.year %}{{ s.year }} · {% endif %}featured on {{ s.owner_name }}</p>
-  </a>
-  {% else %}
-  <a href="{{ url_for('single', slug=artist.slug, single_slug=s.slug) }}">
-    {{ art.cover(s.cover, s.title ~ ' cover', 'blue') }}
-    <h3>{{ s.title }}</h3>
-    {% if s.year %}<p class="meta">{{ s.year }}</p>{% endif %}
-  </a>
-  {% endif %}
+  {% set single_slug = s.owner_slug or artist.slug %}
+  <article class="single-card group">
+    <a class="cover-link" href="{{ url_for('single', slug=single_slug, single_slug=s.slug) }}" aria-label="Open {{ s.title }}">
+      {{ art.cover(s.cover, s.title ~ ' cover', 'blue') }}
+    </a>
+    <span class="single-copy">
+      <span class="single-type">Single</span>
+      <a class="single-title" href="{{ url_for('single', slug=single_slug, single_slug=s.slug) }}">{{ s.title }}</a>
+      {% if s.owner_slug %}
+      <span class="meta">{% if s.year %}{% set release_date_url = date_page_url(s.year) %}{% if release_date_url %}<a class="date-page-date-link" href="{{ release_date_url }}">{{ s.year }}</a>{% else %}{{ s.year }}{% endif %} · {% endif %}featured on {% set owner_link = artist_link(s.owner_name) %}{% if owner_link %}{{ credit.artist(s.owner_name, owner_link) }}{% else %}{{ s.owner_name }}{% endif %}</span>
+      {% elif s.year or s.features %}
+      <span class="meta">{% if s.year %}{% set release_date_url = date_page_url(s.year) %}{% if release_date_url %}<a class="date-page-date-link" href="{{ release_date_url }}">{{ s.year }}</a>{% else %}{{ s.year }}{% endif %}{% endif %}{% if s.year and s.features %} · {% endif %}{% if s.features %}featuring {% for f in s.features %}{% set feature_link = artist_link(f) %}{% if feature_link %}{{ credit.artist(f, feature_link) }}{% else %}{{ f }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</span>
+      {% endif %}
+    </span>
+    <a class="single-arrow" href="{{ url_for('single', slug=single_slug, single_slug=s.slug) }}" aria-label="Open {{ s.title }}">→</a>
+  </article>
   {% endfor %}
 </div>
 {% endif %}
@@ -2598,6 +2796,76 @@ ARTIST = """
 {% endblock %}
 """
 
+DATE_PAGE = """
+{% extends "layout.html" %}
+{% import "cover.html" as art %}
+{% import "credit-hover.html" as credit %}
+{% block title %}{{ date_label }} — Underground Catalog{% endblock %}
+{% block masthead %}<a class="backlink" href="{{ url_for('index') }}">All Underground Rappers</a>{% endblock %}
+{% block content %}
+<div class="date-page-head">
+  <div>
+    <p class="date-page-kicker">Catalog releases</p>
+    <h1>{{ date_label }}</h1>
+  </div>
+  <span class="date-page-count">{{ date_projects|length }} release{{ '' if date_projects|length == 1 else 's' }} · {{ date_singles|length }} single{{ '' if date_singles|length == 1 else 's' }}</span>
+</div>
+
+{% if date_projects %}
+<div class="section-head date-section-head">
+  <h2>Albums &amp; EPs</h2>
+  <span>{{ date_projects|length }} release{{ '' if date_projects|length == 1 else 's' }}</span>
+</div>
+<div class="date-projects space-y-4">
+{% for p in date_projects %}
+<article class="release date-release group relative z-0 overflow-visible rounded-2xl border border-[color:var(--border-soft)] bg-[color:var(--paper)] shadow-lg transition-all duration-300 hover:z-20 hover:-translate-y-1 hover:shadow-2xl">
+  <div class="flex w-full min-w-0 items-center gap-5 p-4 sm:gap-6 sm:p-5">
+    <a class="block w-24 h-24 sm:w-32 sm:h-32 !shrink-0 overflow-hidden rounded-2xl" href="{{ url_for('project', slug=p.artist_slug, project_slug=p.slug) }}" aria-label="View {{ p.title }} by {{ p.artist_name }}">
+      {{ art.cover(p.cover, p.title ~ ' cover') }}
+    </a>
+    <div class="min-w-0 flex-1 py-1">
+      <div class="flex items-start gap-3">
+        <div class="min-w-0 flex-1">
+          <h3 class="!m-0 !text-xl sm:!text-3xl !leading-tight !font-black truncate">
+            <a class="no-underline transition-colors duration-200 hover:!text-[var(--red-bright)]" href="{{ url_for('project', slug=p.artist_slug, project_slug=p.slug) }}">{{ p.title }}</a>
+          </h3>
+          <p class="kindline !m-1 !mt-2 !text-xs sm:!text-sm !font-semibold">
+            {{ p.kind }} · <a href="{{ url_for('date_page', date_slug=date_page_slug(p.year)) }}">{{ p.year }}</a> · {{ p.tracks|length }} tracks · by {% set artist_url = url_for('artist', slug=p.artist_slug) %}{{ credit.artist(p.artist_name, artist_url) }}{% if p.collab %} · with {% for c in p.collab %}{% set link = artist_link(c) %}{% if link %}{{ credit.artist(c, link) }}{% else %}{{ c }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}
+          </p>
+        </div>
+        <a class="mt-1 hidden sm:flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-[color:var(--border-soft)] text-xl text-[color:var(--mute)] transition-all duration-200 group-hover:border-[color:var(--red-bright)] group-hover:text-[color:var(--red-bright)]" href="{{ url_for('project', slug=p.artist_slug, project_slug=p.slug) }}" aria-label="Open {{ p.title }}">→</a>
+      </div>
+      <a class="mt-3 inline-flex items-center gap-2 rounded-xl border border-transparent px-3 py-2 text-sm font-bold text-[color:var(--blue)] transition-all duration-200 hover:border-[color:var(--border-soft)] hover:bg-black/5 hover:text-[color:var(--red-bright)] dark:hover:bg-white/5" href="{{ url_for('project', slug=p.artist_slug, project_slug=p.slug) }}">View project <span class="transition-transform duration-200 group-hover:translate-x-1">→</span></a>
+    </div>
+  </div>
+</article>
+{% endfor %}
+</div>
+{% endif %}
+
+{% if date_singles %}
+<div class="section-head date-section-head"><h2>Singles</h2>
+  <span>{{ date_singles|length }} single{{ '' if date_singles|length == 1 else 's' }}</span></div>
+<div class="singles date-singles" id="date-singles-grid">
+  {% for s in date_singles %}
+  <article class="single-card group">
+    <a class="cover-link" href="{{ url_for('single', slug=s.artist_slug, single_slug=s.slug) }}" aria-label="Open {{ s.title }} by {{ s.artist_name }}">
+      {{ art.cover(s.cover, s.title ~ ' cover', 'blue') }}
+    </a>
+    <span class="single-copy">
+      <span class="single-type">Single</span>
+      <a class="single-title" href="{{ url_for('single', slug=s.artist_slug, single_slug=s.slug) }}">{{ s.title }}</a>
+      <span class="meta"><a class="date-page-date-link" href="{{ url_for('date_page', date_slug=date_page_slug(s.year)) }}">{{ s.year }}</a> · by {% set artist_url = url_for('artist', slug=s.artist_slug) %}{{ credit.artist(s.artist_name, artist_url) }}{% if s.features %} · featuring {% for f in s.features %}{% set feature_link = artist_link(f) %}{% if feature_link %}{{ credit.artist(f, feature_link) }}{% else %}{{ f }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</span>
+    </span>
+    <a class="single-arrow" href="{{ url_for('single', slug=s.artist_slug, single_slug=s.slug) }}" aria-label="Open {{ s.title }}">→</a>
+  </article>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+"""
+
 CREDIT_HOVER = """
 {% macro artist(name, link) %}
 {% set info = artist_hover_info(name) %}
@@ -2648,20 +2916,24 @@ PROJECT = """
 {% import "video.html" as mv %}
 {% import "credit-hover.html" as credit %}
 {% import "share.html" as share %}
+{% import "genius.html" as genius %}
 {% block title %}{{ project.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('artist', slug=artist.slug) }}">Back to {{ artist.name }}</a>{% endblock %}
 {% block content %}
 <div class="detail">
-  <div>{{ art.cover(project.cover, project.title ~ ' cover') }}</div>
+  <div>
+    {{ art.cover(project.cover, project.title ~ ' cover') }}
+    <div class="detail-cover-actions">
+      {{ share.share() }}
+      {{ genius.button(artist.name, project.title) }}
+    </div>
+  </div>
   <div>
     <h1>{{ project.title }}</h1>
-    <p class="kindline">{{ project.kind }}{% if project.year %} · {{ project.year }}{% endif %}
+    <p class="kindline">{{ project.kind }}{% if project.year %} · {% set release_date_url = date_page_url(project.year) %}{% if release_date_url %}<a href="{{ release_date_url }}">{{ project.year }}</a>{% else %}{{ project.year }}{% endif %}{% endif %}
       · {{ artist.name }}
       {%- if project.collab %} · with {% for c in project.collab %}{% set link = artist_link(c) %}{% if link %}{{ credit.artist(c, link) }}{% else %}{{ c }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}{% endif %}</p>
-    <div class="share-play-row">
-      {{ play.listen(project.url) }}
-      {{ share.share() }}
-    </div>
+    {{ play.listen(project.url) }}
 
     {% if project.tracks %}
     <ol class="tracklist">
@@ -2691,11 +2963,17 @@ TRACK = """
 {% import "cover.html" as art %}
 {% import "listen.html" as play %}
 {% import "credit-hover.html" as credit %}
+{% import "genius.html" as genius %}
 {% block title %}{{ track.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('project', slug=artist.slug, project_slug=project.slug) }}">Back to {{ project.title }}</a>{% endblock %}
 {% block content %}
 <div class="detail">
-  <div>{{ art.cover(project.cover, project.title ~ ' cover', 'blue') }}</div>
+  <div>
+    {{ art.cover(project.cover, project.title ~ ' cover', 'blue') }}
+    <div class="detail-cover-actions">
+      {{ genius.button(artist.name, track.title) }}
+    </div>
+  </div>
   <div>
     <h1>{{ track.title }}</h1>
     <p class="kindline">Track {{ '%02d' % track.number }} on
@@ -2706,7 +2984,7 @@ TRACK = """
       {% if track.producers %}<li><b>Produced by</b><span>
         {% for p in track.producers %}{% set link = artist_link(p) %}{% if link %}{{ credit.artist(p, link ~ '?mode=producer') }}{% else %}<a href="{{ producer_link(p) }}">{{ p }}</a>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}
       </span></li>{% endif %}
-      {% if project.year %}<li><b>Released</b><span>{{ project.year }}</span></li>{% endif %}
+      {% if project.year %}<li><b>Released</b><span>{% set release_date_url = date_page_url(project.year) %}{% if release_date_url %}<a href="{{ release_date_url }}">{{ project.year }}</a>{% else %}{{ project.year }}{% endif %}</span></li>{% endif %}
     </ul>
     {{ play.listen(track.url) }}
   </div>
@@ -2720,14 +2998,20 @@ SINGLE = """
 {% import "listen.html" as play %}
 {% import "video.html" as mv %}
 {% import "credit-hover.html" as credit %}
+{% import "genius.html" as genius %}
 {% block title %}{{ single.title }} — {{ artist.name }}{% endblock %}
 {% block masthead %}<a class="backlink" href="{{ url_for('artist', slug=artist.slug) }}">Back to {{ artist.name }}</a>{% endblock %}
 {% block content %}
 <div class="detail">
-  <div>{{ art.cover(single.cover, single.title ~ ' cover', 'blue') }}</div>
+  <div>
+    {{ art.cover(single.cover, single.title ~ ' cover', 'blue') }}
+    <div class="detail-cover-actions">
+      {{ genius.button(artist.name, single.title) }}
+    </div>
+  </div>
   <div>
     <h1>{{ single.title }}</h1>
-    <p class="kindline">Single{% if single.year %} · {{ single.year }}{% endif %} · {{ artist.name }}</p>
+    <p class="kindline">Single{% if single.year %} · {% set release_date_url = date_page_url(single.year) %}{% if release_date_url %}<a href="{{ release_date_url }}">{{ single.year }}</a>{% else %}{{ single.year }}{% endif %}{% endif %} · {{ artist.name }}</p>
     <ul class="credits">
       {% if single.features %}<li><b>Features</b><span>{% for f in single.features %}{% set link = artist_link(f) %}{% if link %}{{ credit.artist(f, link) }}{% else %}{{ f }}{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</span></li>{% endif %}
       {% if single.producers %}<li><b>Produced by</b><span>
@@ -2869,10 +3153,12 @@ app.jinja_loader = DictLoader({
     "logos.html": LOGOS,
     "platforms.html": PLATFORM_ROW,
     "cover.html": COVER_BLOCK,
+    "date.html": DATE_PAGE,
     "listen.html": LISTEN_BLOCK,
     "video.html": VIDEO_BLOCK,
     "credit-hover.html": CREDIT_HOVER,
     "share.html": SHARE_BLOCK,
+    "genius.html": GENIUS_BLOCK,
     "index.html": INDEX,
     "artist.html": ARTIST,
     "project.html": PROJECT,

@@ -1787,6 +1787,13 @@ ARTISTS = [
              "cover": "bleood - its raining cats and dogs.jpg",
              "url": "https://soundcloud.com/infect/bleood-its-raining-cats-and",
          },
+         {
+             "title": "please stop (prod. st47ic, sophitia)",
+             "year": "April 11, 2023",
+             "cover": "bleood - please stop.jpg",
+             "url": "https://soundcloud.com/therockwoodescapeplan/please-stop",
+             "music_video": "https://www.youtube.com/watch?v=eZt3h6MJtDA",
+         },
          
      ],
  },
@@ -5209,6 +5216,30 @@ ARTISTS = [
              "year": "January 27, 2024",
              "cover": "diamond - prune juice.jpg",
              "url": "https://soundcloud.com/hafaae/diamond-prune-juice",
+         },
+         {
+             "title": "trØphy (prod. Nate Varter)",
+             "year": "April 27, 2024",
+             "cover": "diamond - trophy.jpg",
+             "url": "https://soundcloud.com/diamond-554292457/trophy-x-nate-vater",
+         },
+         {
+             "title": "Ewww! (prod. 13shadoww, DOROF, Jack Zorana)",
+             "year": "May 12, 2024",
+             "cover": "diamond - Ewww.jpg",
+             "url": "https://soundcloud.com/diamond-554292457/ewwww",
+         },
+         {
+             "title": "yØla!!! (prod. FADEDKYE)",
+             "year": "June 16, 2024",
+             "cover": "diamond - yola.jpg",
+             "url": "https://soundcloud.com/diamond-554292457/yola-prod-fadedkye",
+         },
+         {
+             "title": "thanks hedi! (prod. zayslatty)",
+             "year": "August 21, 2024",
+             "cover": "diamond - thanks hedi.jpg",
+             "url": "https://soundcloud.com/diamond-554292457/thanks-hedi-x-zayslatty",
          },
          
      ],
